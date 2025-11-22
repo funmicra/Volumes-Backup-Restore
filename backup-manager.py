@@ -157,7 +157,7 @@ def cleanup_backups(BACKUP_DIR, KEEP_LAST, dry_run=False, telegram_enabled=True)
         if KEEP_LAST > 0 and len(files) > KEEP_LAST:
             for old in files[KEEP_LAST:]:
                 if dry_run:
-                    logging.info(f"[DRY RUN] Would remove old backup for volume '{volume}': {old.name}")
+                    logging.info(f"🧹 [DRY RUN] Would remove old backup for volume '{volume}': {old.name}")
                     send_telegram(f"🧹 [DRY RUN] Would remove old backup for volume '{volume}': {old.name}", telegram_enabled)
                 else:
                     try:
@@ -175,7 +175,7 @@ def backup_volume(volume, BACKUP_DIR, dry_run, telegram_enabled):
     outfile = f"{volume}_{timestamp}.tar.gz"
     outpath = Path(BACKUP_DIR) / outfile
 
-    logging.info(f"⚙️ Backing up volume 🖴'{volume}' → {outpath}")
+    logging.info(f"⚙️ Backing up volume 🖴 '{volume}' → {outpath}")
     start = time()
     paused = pause_containers_using(volume, dry_run, telegram_enabled)
 
