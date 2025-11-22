@@ -202,10 +202,10 @@ def backup_volume(volume, BACKUP_DIR, dry_run, telegram_enabled):
         size = human_size(outpath.stat().st_size) if outpath.exists() else "0 B"
         duration = f"{end-start:.2f}s"
 
-        logging.info(f"{status}✅ Backup: {outfile} | Size: {size} | Duration: {duration}")
-        send_telegram(f"{status}✅ Backup!\n 🖴 {outfile}\n🗂️ Size: {size} | ⏰ Duration: {duration}", telegram_enabled)
+        logging.info(f"{status} Backup: 🖴 {outfile} | 📦 Size: {size} | 🕐 Duration: {duration}")
+        send_telegram(f"{status} Backup!\n🖴 {outfile}\n📦 Size: {size}\n🕐 Duration: {duration}", telegram_enabled)
 
-        # Print summary table
+        # Print summary table for this backup
         table = PrettyTable()
         table.field_names = ["Volume", "File", "Size", "Duration", "Status"]
         table.add_row([volume, outfile, size, duration, status])
@@ -217,8 +217,11 @@ def backup_volume(volume, BACKUP_DIR, dry_run, telegram_enabled):
     finally:
         unpause(paused, dry_run, telegram_enabled)
 
-
 def restore_backup(file_path, BACKUP_DIR, dry_run, telegram_enabled):
+    """
+    Perform a single restore and return a summary row:
+      [volume_name, file_name, size, duration, status]
+    """
     file_path = Path(file_path)
     volume_name = "_".join(file_path.stem.split("_")[:-2])
     logging.info(f"⚙️ Restoring {file_path} → 🖴 Volume: {volume_name}")
@@ -233,7 +236,6 @@ def restore_backup(file_path, BACKUP_DIR, dry_run, telegram_enabled):
         "sh", "-c", f"rm -rf /volume/* && tar -xzf /backup/{file_path.name} -C /volume"
     ]
 
-    status = "❌ Failed"
     try:
         if dry_run:
             dry(f"Would restore: {' '.join(cmd)}", telegram_enabled)
@@ -246,20 +248,30 @@ def restore_backup(file_path, BACKUP_DIR, dry_run, telegram_enabled):
         size = human_size(file_path.stat().st_size)
         duration = f"{end-start:.2f}s"
 
-        logging.info(f"{status} ⬇️ Restore: 🖴 {volume_name} | 📦 Size: {size} | ⏰ Duration: {duration}")
-        send_telegram(f"{status} ⬇️ Restore: {volume_name}\n📦 Size: {size} | ⏰ Duration: {duration}", telegram_enabled)
+        logging.info(f"{status} Restore! 🖴 {volume_name} | 📦 Size: {size} | 🕐 Duration: {duration}")
+        send_telegram(f"{status} Restore!\n🖴 {volume_name}\n📦 Size: {size}\n🕐 Duration: {duration}", telegram_enabled)
 
-        # Print summary table
-        table = PrettyTable()
-        table.field_names = ["Volume", "File", "Size", "Duration", "Status"]
-        table.add_row([volume_name, file_path.name, size, duration, status])
-        print(table)
+        # RETURN summary row (don't print here)
+        return [volume_name, file_path.name, size, duration, status]
 
     except Exception as e:
-        logging.error(f"❌ Restore failed for {volume_name}: {e}")
-        send_telegram(f"❌ Restore failed for {volume_name}", telegram_enabled)
+        logging.error(f"❌ Restore failed for {file_path}: {e}")
+        send_telegram(f"❌ Restore failed for {file_path}", telegram_enabled)
+        return [volume_name, file_path.name, "0 B", "0s", "❌ Failed"]
+
     finally:
         unpause(paused, dry_run, telegram_enabled)
+
+def print_restore_summary(summary_rows):
+    if not summary_rows:
+        print("No restore operations executed.")
+        return
+    table = PrettyTable()
+    table.field_names = ["Volume", "File", "Size", "Duration", "Status"]
+    for row in summary_rows:
+        table.add_row(row)
+    print("\n=== RESTORE SUMMARY ===")
+    print(table)
 
 # -------------------------------------------------------------------
 # Interactive CLI
@@ -269,9 +281,9 @@ def main_menu():
     print(" Docker Volume Backup & Restore Tool")
     print("=" * 40)
     options = [
-        ("1", "Backup a volume", "💾"),
-        ("2", "Restore a volume", "🔄"),
-        ("0", "Exit", "❌"),
+        ("1", "Backup a volume", "🖴 ->🗄️"),
+        ("2", "Restore a volume", "🖴 <-🗄️"),
+        ("0", "Exit", "  ❌"),
     ]
     for key, text, icon in options:
         print(f"{key}) {text.ljust(25)} {icon}")
@@ -310,8 +322,12 @@ def main():
             selected_backups = select_with_all_option(backups, "backup")
             if selected_backups is None:
                 continue
+            # accumulate summaries and print one table at the end
+            restore_summary = []
             for bkp in selected_backups:
-                restore_backup(bkp, BACKUP_DIR, dry_run, telegram_enabled)
+                row = restore_backup(bkp, BACKUP_DIR, dry_run, telegram_enabled)
+                restore_summary.append(row)
+            print_restore_summary(restore_summary)
         elif choice == "0":
             print("Exiting workflow. Operational cycle terminated.")
             break
