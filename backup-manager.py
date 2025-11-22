@@ -202,8 +202,8 @@ def backup_volume(volume, BACKUP_DIR, dry_run, telegram_enabled):
         size = human_size(outpath.stat().st_size) if outpath.exists() else "0 B"
         duration = f"{end-start:.2f}s"
 
-        logging.info(f"{status} Backup: {outfile} | Size: {size} | Duration: {duration}")
-        send_telegram(f"{status} Backup!\n 🖴 {outfile}\n🗂️ Size: {size} | ⏰ Duration: {duration}", telegram_enabled)
+        logging.info(f"{status}✅ Backup: {outfile} | Size: {size} | Duration: {duration}")
+        send_telegram(f"{status}✅ Backup!\n 🖴 {outfile}\n🗂️ Size: {size} | ⏰ Duration: {duration}", telegram_enabled)
 
         # Print summary table
         table = PrettyTable()
@@ -221,7 +221,7 @@ def backup_volume(volume, BACKUP_DIR, dry_run, telegram_enabled):
 def restore_backup(file_path, BACKUP_DIR, dry_run, telegram_enabled):
     file_path = Path(file_path)
     volume_name = "_".join(file_path.stem.split("_")[:-2])
-    logging.info(f"Restoring {file_path} → Volume: {volume_name}")
+    logging.info(f"⚙️ Restoring {file_path} → 🖴 Volume: {volume_name}")
     start = time()
     paused = pause_containers_using(volume_name, dry_run, telegram_enabled)
 
@@ -246,8 +246,8 @@ def restore_backup(file_path, BACKUP_DIR, dry_run, telegram_enabled):
         size = human_size(file_path.stat().st_size)
         duration = f"{end-start:.2f}s"
 
-        logging.info(f"{status} Restore: {volume_name} | Size: {size} | Duration: {duration}")
-        send_telegram(f"{status} Restore: {volume_name}\n🗂️ Size: {size} | ⏰ Duration: {duration}", telegram_enabled)
+        logging.info(f"{status} ⬇️ Restore: 🖴 {volume_name} | 📦 Size: {size} | ⏰ Duration: {duration}")
+        send_telegram(f"{status} ⬇️ Restore: {volume_name}\n📦 Size: {size} | ⏰ Duration: {duration}", telegram_enabled)
 
         # Print summary table
         table = PrettyTable()
@@ -260,71 +260,6 @@ def restore_backup(file_path, BACKUP_DIR, dry_run, telegram_enabled):
         send_telegram(f"❌ Restore failed for {volume_name}", telegram_enabled)
     finally:
         unpause(paused, dry_run, telegram_enabled)
-
-# def backup_volume(volume, BACKUP_DIR, dry_run, telegram_enabled):
-#     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-#     outfile = f"{volume}_{timestamp}.tar.gz"
-#     outpath = Path(BACKUP_DIR) / outfile
-
-#     logging.info(f"⚙️ Backing up volume 🖴'{volume}' → {outpath}")
-#     start = time()
-#     paused = pause_containers_using(volume, dry_run, telegram_enabled)
-
-#     cmd = [
-#         "docker", "run", "--rm",
-#         "-v", f"{volume}:/volume",
-#         "-v", f"{BACKUP_DIR}:/backup",
-#         "debian:stable-slim",
-#         "sh", "-c", f"tar -czf /backup/{outfile} -C /volume ."
-#     ]
-
-#     try:
-#         if dry_run:
-#             dry(f"Would run: {' '.join(cmd)}", telegram_enabled)
-#             cleanup_backups(BACKUP_DIR, KEEP_LAST, dry_run=True, telegram_enabled=telegram_enabled)
-#         else:
-#             subprocess.run(cmd, check=True)
-#             cleanup_backups(BACKUP_DIR, KEEP_LAST, dry_run=False, telegram_enabled=telegram_enabled)
-
-#         end = time()
-#         size = human_size(outpath.stat().st_size) if outpath.exists() else "0 B"
-#         logging.info(f"✅ Backup complete: 🖴 {outfile} | 🗂️ Size: {size} | ⏰ Duration: {end-start:.2f}s")
-#         send_telegram(f"✅ Backup complete!\n 🖴 {outfile}\n🗂️ Size: {size} | ⏰ Duration: {end-start:.2f}s", telegram_enabled)
-#     except Exception as e:
-#         logging.error(f"❌ Backup failed for {volume}: {e}")
-#         send_telegram(f"❌ Backup failed for {volume}", telegram_enabled)
-#     finally:
-#         unpause(paused, dry_run, telegram_enabled)
-
-# def restore_backup(file_path, BACKUP_DIR, dry_run, telegram_enabled):
-#     file_path = Path(file_path)
-#     volume_name = "_".join(file_path.stem.split("_")[:-2])
-#     logging.info(f"Restoring {file_path} → Volume: {volume_name}")
-#     start = time()
-#     paused = pause_containers_using(volume_name, dry_run, telegram_enabled)
-
-#     cmd = [
-#         "docker", "run", "--rm",
-#         "-v", f"{volume_name}:/volume",
-#         "-v", f"{BACKUP_DIR}:/backup",
-#         "debian:stable-slim",
-#         "sh", "-c", f"rm -rf /volume/* && tar -xzf /backup/{file_path.name} -C /volume"
-#     ]
-
-#     try:
-#         if dry_run:
-#             dry(f"Would restore: {' '.join(cmd)}", telegram_enabled)
-#         else:
-#             subprocess.run(cmd, check=True)
-#         end = time()
-#         size = human_size(file_path.stat().st_size)
-#         logging.info(f"✅ Restore complete: 🖴{volume_name} | 🗂️ Size: {size} | ⏰ Duration: {end-start:.2f}s")
-#         send_telegram(f"✔️ Restore complete: {volume_name}\n🗂️ Size: {size} | ⏰ Duration: {end-start:.2f}s", telegram_enabled)
-#     except Exception as e:
-#         logging.error(f"❌ Restore failed for {volume_name}: {e}")
-#         send_telegram(f"❌ Restore failed for {volume_name}", telegram_enabled)
-#     finally:
-#         unpause(paused, dry_run, telegram_enabled)
 
 # -------------------------------------------------------------------
 # Interactive CLI
