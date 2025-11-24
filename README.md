@@ -28,6 +28,7 @@ The net impact: reduced operational overhead, predictable RTO, and elevated reli
 - Full-screen menu UX for backup/restore
 - Summary tables at the end of each operation
 - Optional Telegram integration for fleet-wide notifications
+- Optional run silent with --backup-all flag
 - Compatible with Cron, GitHub Actions, Ansible, systemd timers, or manual triggers
 --- 
 
@@ -37,7 +38,9 @@ The runtime behavior is driven by .env or shell-provided values:
 | Variable           | Description                                                                   |
 | ------------------ | ----------------------------------------------------------------------------- |
 | `BACKUP_DIR`       | Target directory where `.tar.gz` archives land                                |
+| `LOG_FILE`         | Taget diectoy where backup.log lives                                          |
 | `KEEP_LAST`        | Number of backups to keep *per volume*                                        |
+| `TELEGRAM_ENABLED` | Set it YES if you are going to use Telegram, by default is FALSE              |
 | `TELEGRAM_TOKEN`   | Optional — enables Telegram notifications                                     |
 | `TELEGRAM_CHAT_ID` | Optional — destination chat for alerts                                        |
 
@@ -54,7 +57,9 @@ Populate your .env:
 
 ```bash
 BACKUP_DIR=/path/to/backup
+LOG_FILE=
 KEEP_LAST=3
+TELEGRAM_ENABLED=yes ()
 TELEGRAM_TOKEN=
 TELEGRAM_CHAT_ID=
 ```
@@ -63,6 +68,8 @@ TELEGRAM_CHAT_ID=
 ## **▶️ Usage**
 Start the interactive manager
 ```bash
+python3 -m venv venv
+pip install -r requirements.txt
 python3 backup-manager.py
 ```
 You’ll be presented with an operational menu:

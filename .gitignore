@@ -67,5 +67,4 @@ pytestdebug.log
 Thumbs.db
 
 
-volumes-backup-v1.py
-volumes-backup-v3.py
+backup-manager-v1.py
