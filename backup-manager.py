@@ -9,15 +9,16 @@ from time import time
 from dotenv import load_dotenv
 import argparse
 from collections import defaultdict
-from prettytable import PrettyTable 
+from prettytable import PrettyTable
 
 # -------------------------------------------------------------------
-# Load .env
+# Load environment
 # -------------------------------------------------------------------
 load_dotenv()
 BACKUP_DIR = os.getenv("BACKUP_DIR")
 if not BACKUP_DIR:
-    raise ValueError("BACKUP_DIR not set in .env")
+    raise SystemExit("BACKUP_DIR not set in environment or .env")
+BACKUP_DIR = Path(BACKUP_DIR).resolve()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
@@ -30,16 +31,18 @@ if KEEP_LAST is not None:
         raise ValueError("KEEP_LAST must be an integer")
 else:
     KEEP_LAST = 0  # 0 = keep all backups
-# -------------------------------------------------------------------
-# Log File
-# -------------------------------------------------------------------
-LOG_FILE = Path(BACKUP_DIR) / "backup.log"
 
+LOG_FILE = Path(BACKUP_DIR) / "backup.log"
+LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+# -------------------------------------------------------------------
+# Logging setup (basic, will adjust in main)
+# -------------------------------------------------------------------
 logging.basicConfig(
-    filename=LOG_FILE,  # write logs to file
-    filemode='a',        # append to existing file
+    filename=LOG_FILE,
+    filemode='a',
     format="%(asctime)s - %(levelname)s - %(message)s",
-    level=logging.INFO   # or DEBUG for more detail
+    level=logging.INFO
 )
 
 # -------------------------------------------------------------------
@@ -69,8 +72,92 @@ def dry(msg, telegram_enabled, quiet=False):
     if not quiet:
         logging.info(f"[DRY RUN] {msg}")
     send_telegram(f"🔍 DRY RUN: {msg}", telegram_enabled)
-    # logging.info(f"[DRY RUN] {msg}")
-    # send_telegram(f"🔍 DRY RUN: {msg}", telegram_enabled)
+
+# -------------------------------------------------------------------
+# NFS / backup dir validation
+# -------------------------------------------------------------------
+def validate_backup_dir(path: Path, interactive=True, telegram_enabled=True):
+    """Ensure BACKUP_DIR exists, mounted, writable, and not stale."""
+    if not path.exists():
+        msg = f"Backup path does not exist: {path}"
+        logging.error(msg)
+        send_telegram(f"❌ Backup aborted — path missing.\n{msg}", telegram_enabled)
+        if interactive: input("Press Enter to exit...")
+        raise SystemExit(msg)
+
+    # Walk up to find actual mount
+    mount_point = path
+    while not os.path.ismount(mount_point) and mount_point != Path("/"):
+        mount_point = mount_point.parent
+
+    if not os.path.ismount(mount_point):
+        msg = f"NFS mount inactive at {path}"
+        logging.error(msg)
+        send_telegram(f"❌ Backup aborted — NFS not mounted.\n{msg}", telegram_enabled)
+        if interactive: input("Press Enter to exit...")
+        raise SystemExit(msg)
+
+    # Stale mount detection
+    try:
+        statvfs = os.statvfs(path)
+        if statvfs.f_blocks == 0 or statvfs.f_bavail == 0:
+            msg = f"NFS mount appears stale or empty at {path}"
+            logging.error(msg)
+            send_telegram(f"❌ Backup aborted — NFS stale.\n{msg}", telegram_enabled)
+            if interactive: input("Press Enter to exit...")
+            raise SystemExit(msg)
+    except OSError as e:
+        msg = f"Error accessing backup path: {e}"
+        logging.error(msg)
+        send_telegram(f"❌ Backup aborted — path error.\n{msg}", telegram_enabled)
+        if interactive: input("Press Enter to exit...")
+        raise SystemExit(msg)
+
+    # Test write
+    test_file = path / f".nfs_probe_{int(time())}"
+    try:
+        with open(test_file, "w") as f:
+            f.write("probe")
+        test_file.unlink()
+    except Exception as e:
+        msg = f"Backup path not writable: {e}"
+        logging.error(msg)
+        send_telegram(f"❌ Backup aborted — path not writable.\n{msg}", telegram_enabled)
+        if interactive: input("Press Enter to exit...")
+        raise SystemExit(msg)
+
+    logging.info(f"✅ Backup path verified: {path} (mount: {mount_point})")
+    send_telegram(f"✅ Backup path verified: {path}\nMount: {mount_point}", telegram_enabled)
+
+import subprocess
+
+def log_backup_path_type(path: Path, telegram_enabled=True):
+    """
+    Logs whether the backup path is a local filesystem or NFS.
+    Sends Telegram notification as well.
+    """
+    try:
+        # Use 'df -T' to detect filesystem type
+        result = subprocess.run(
+            ["df", "-T", str(path)],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        lines = result.stdout.strip().splitlines()
+        if len(lines) >= 2:
+            fs_type = lines[1].split()[1]  # second column is FS type
+            if fs_type in ("nfs", "nfs4"):
+                msg = f"Backup path is NFS: {path} (FS type: {fs_type})"
+            else:
+                msg = f"Backup path is local: {path} (FS type: {fs_type})"
+            logging.info(msg)
+            send_telegram(f"ℹ️ {msg}", telegram_enabled)
+        else:
+            logging.warning(f"Unable to detect filesystem type for {path}")
+    except Exception as e:
+        logging.warning(f"Filesystem type detection failed for {path}: {e}")
+
 
 # -------------------------------------------------------------------
 # Helpers
@@ -86,32 +173,19 @@ def human_size(size_bytes, decimal_places=2):
     return f"{size_bytes:.{decimal_places}f} PB"
 
 def select_with_all_option(items, label="item"):
-    """
-    Numbered selection menu.
-    Supports:
-      - 0 = all
-      - comma-separated multiple selection
-      - B = back/cancel
-    Returns selected items or None if canceled.
-    """
     while True:
         print(f"\nSelect {label} by index (0 = ALL, comma-separated, B = Back/Cancel):")
         choice = input("Your choice: ").strip()
-        if not choice:
-            print("No selection made.")
-            continue
-        if choice.lower() == "b":
-            return None
+        if not choice: continue
+        if choice.lower() == "b": return None
         selected = []
         try:
             for part in choice.split(","):
                 idx = int(part)
-                if idx == 0:
-                    return items
+                if idx == 0: return items
                 if 1 <= idx <= len(items):
                     selected.append(items[idx-1])
-                else:
-                    raise ValueError
+                else: raise ValueError
             return selected
         except ValueError:
             print(f"Invalid input. Use numbers 0-{len(items)}, commas for multiple, or B to go back.")
@@ -143,12 +217,9 @@ def unpause(containers, dry_run, telegram_enabled):
             subprocess.run(["docker", "unpause", c], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 # -------------------------------------------------------------------
-# Clean old backup but keep the last defined
+# Cleanup old backups
 # -------------------------------------------------------------------
 def cleanup_backups(BACKUP_DIR, KEEP_LAST, dry_run=False, telegram_enabled=True):
-    """
-    Keeps last KEEP_LAST backups per volume, removes older ones.
-    """
     backups = sorted(Path(BACKUP_DIR).glob("*.tar.gz"), key=lambda x: x.stat().st_mtime, reverse=True)
     volume_groups = defaultdict(list)
     for b in backups:
@@ -171,7 +242,7 @@ def cleanup_backups(BACKUP_DIR, KEEP_LAST, dry_run=False, telegram_enabled=True)
                         send_telegram(f"⚠️ Failed to remove old backup {old.name}: {e}", telegram_enabled)
 
 # -------------------------------------------------------------------
-# Backup & Restore with summary
+# Backup / Restore
 # -------------------------------------------------------------------
 def backup_volume(volume, BACKUP_DIR, dry_run, telegram_enabled):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -207,11 +278,7 @@ def backup_volume(volume, BACKUP_DIR, dry_run, telegram_enabled):
 
         logging.info(f"{status} Backup: 🖴 {outfile} | 📦 Size: {size} | 🕐 Duration: {duration}")
         send_telegram(f"{status} Backup!\n🖴 {outfile}\n📦 Size: {size}\n🕐 Duration: {duration}", telegram_enabled)
-
-        # Build and return summary row (same shape as restore_backup)
-        row = [volume, outfile, BACKUP_DIR, size, duration, status]
-
-        return row
+        return [volume, outfile, BACKUP_DIR, size, duration, status]
 
     except Exception as e:
         logging.error(f"❌ Backup failed for {volume}: {e}")
@@ -222,7 +289,6 @@ def backup_volume(volume, BACKUP_DIR, dry_run, telegram_enabled):
 
     finally:
         unpause(paused, dry_run, telegram_enabled)
-
 
 def restore_backup(file_path, BACKUP_DIR, dry_run, telegram_enabled):
     file_path = Path(file_path)
@@ -253,7 +319,6 @@ def restore_backup(file_path, BACKUP_DIR, dry_run, telegram_enabled):
 
         logging.info(f"{status} Restore! 🖴 {volume_name} | 📦 Size: {size} | 🕐 Duration: {duration}")
         send_telegram(f"{status} Restore!\n🖴 {volume_name}\n📦 Size: {size}\n🕐 Duration: {duration}", telegram_enabled)
-
         return [volume_name, file_path.name, BACKUP_DIR, size, duration, status]
 
     except Exception as e:
@@ -265,57 +330,37 @@ def restore_backup(file_path, BACKUP_DIR, dry_run, telegram_enabled):
         unpause(paused, dry_run, telegram_enabled)
 
 # -------------------------------------------------------------------
-# Print summaries (terminal or log)
+# Display helpers
 # -------------------------------------------------------------------
 def print_Backup_summary(summary_rows, log_only=False):
     if not summary_rows:
         msg = "No backup operations executed."
-        if log_only:
-            logging.info(msg)
-        else:
-            print(msg)
+        logging.info(msg) if log_only else print(msg)
         return
     table = PrettyTable()
     table.field_names = ["🖴 Volume", "File", "Destination", "📦 Size", "🕐 Duration", "🀄️ Status"]
-    for row in summary_rows:
-        table.add_row(row)
+    for row in summary_rows: table.add_row(row)
     output = "\n=== BACKUP SUMMARY ===\n" + table.get_string()
-    if log_only:
-        logging.info(output)
-    else:
-        print(output)
+    logging.info(output) if log_only else print(output)
 
 def print_restore_summary(summary_rows, log_only=False):
     if not summary_rows:
         msg = "No restore operations executed."
-        if log_only:
-            logging.info(msg)
-        else:
-            print(msg)
+        logging.info(msg) if log_only else print(msg)
         return
     table = PrettyTable()
     table.field_names = ["🖴 Volume", "File", "Destination", "📦 Size", "🕐 Duration", "🀄️ Status"]
-    for row in summary_rows:
-        table.add_row(row)
+    for row in summary_rows: table.add_row(row)
     output = "\n=== RESTORE SUMMARY ===\n" + table.get_string()
-    if log_only:
-        logging.info(output)
-    else:
-        print(output)
+    logging.info(output) if log_only else print(output)
 
-# -------------------------------------------------------------------
-# Display Volumes & Backups with PrettyTable
-# -------------------------------------------------------------------
 def list_volumes(print_table=True):
     result = subprocess.run(
         ["docker", "volume", "ls", "--format", "{{.Name}}"],
         capture_output=True, text=True, check=True
     )
     volumes = [v for v in result.stdout.strip().split("\n") if v]
-    if not volumes:
-        print("No Docker volumes found.")
-        return []
-    if print_table:
+    if print_table and volumes:
         table = PrettyTable()
         table.field_names = ["Index", "Volume Name"]
         for idx, v in enumerate(volumes, start=1):
@@ -331,34 +376,17 @@ def list_backups(BACKUP_DIR):
 
     table = PrettyTable()
     table.field_names = ["Index", "Backup File", "Destination", "Date", "Size"]
-    for idx, b, in enumerate(backups, start=1):
+    for idx, b in enumerate(backups, start=1):
         stat = b.stat()
-        date_str = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
-        size_str = human_size(stat.st_size)
-
-        table.add_row([
-            idx,
-            b.name,
-            BACKUP_DIR,
-            date_str,
-            size_str
-        ])
+        table.add_row([idx, b.name, BACKUP_DIR, datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S"), human_size(stat.st_size)])
     print(table)
     return backups
 
-# -------------------------------------------------------------------
-# Interactive CLI
-# -------------------------------------------------------------------
 def main_menu_table():
     table = PrettyTable()
     table.field_names = ["Option", "Action", "Icon"]
-    options = [
-        ("1", "Backup a volume", "🖴 ->💾"),
-        ("2", "Restore a volume", "🖴 <-💾"),
-        ("0", "Exit", "❌"),
-    ]
-    for opt, action, icon in options:
-        table.add_row([opt, action, icon])
+    options = [("1", "Backup a volume", "🖴 ->💾"), ("2", "Restore a volume", "🖴 <-💾"), ("0", "Exit", "❌")]
+    for opt, action, icon in options: table.add_row([opt, action, icon])
     print(table)
 
 # -------------------------------------------------------------------
@@ -373,10 +401,9 @@ def main():
 
     os.makedirs(BACKUP_DIR, exist_ok=True)
 
-    # --- Logging setup ---
+    # Adjust logging
     logging.getLogger().handlers.clear()
     if backup_all:
-        # Silent terminal, log only to file
         logging.basicConfig(
             filename=LOG_FILE,
             filemode='a',
@@ -385,24 +412,24 @@ def main():
         )
         log_only = True
     else:
-        # Interactive: logs go to terminal + file
         logging.basicConfig(
             format="%(asctime)s - %(levelname)s - %(message)s",
             level=logging.DEBUG if verbose else logging.INFO
         )
         log_only = False
 
-    # --- Non-interactive backup ---
+    # Validate backup dir (NFS)
+    validate_backup_dir(BACKUP_DIR, interactive=not backup_all, telegram_enabled=telegram_enabled)
+    log_backup_path_type(Path(BACKUP_DIR), telegram_enabled=telegram_enabled)
+
+    # Non-interactive full backup
     if backup_all:
         volumes = list_volumes(print_table=False)
-        backup_summary = []
-        for vol in volumes:
-            row = backup_volume(vol, BACKUP_DIR, dry_run, telegram_enabled)
-            backup_summary.append(row)
-        print_Backup_summary(backup_summary, log_only=log_only)
+        summary = [backup_volume(v, BACKUP_DIR, dry_run, telegram_enabled) for v in volumes]
+        print_Backup_summary(summary, log_only=log_only)
         exit(0)
 
-    # --- Interactive menu ---
+    # Interactive menu
     while True:
         main_menu_table()
         choice = input("Select option: ").strip()
@@ -410,27 +437,17 @@ def main():
             clear_screen()
             volumes = list_volumes()
             selected_volumes = select_with_all_option(volumes, "volume")
-            if selected_volumes is None:
-                continue
-            backup_summary=[]
-            for vol in selected_volumes:
-                row_b = backup_volume(vol, BACKUP_DIR, dry_run, telegram_enabled)
-                backup_summary.append(row_b)
-            print_Backup_summary(backup_summary, log_only=log_only)
-
+            if selected_volumes is None: continue
+            summary = [backup_volume(v, BACKUP_DIR, dry_run, telegram_enabled) for v in selected_volumes]
+            print_Backup_summary(summary, log_only=log_only)
         elif choice == "2":
             clear_screen()
             backups = list_backups(BACKUP_DIR)
-            if not backups:
-                continue
+            if not backups: continue
             selected_backups = select_with_all_option(backups, "backup")
-            if selected_backups is None:
-                continue
-            restore_summary = []
-            for bkp in selected_backups:
-                row_r = restore_backup(bkp, BACKUP_DIR, dry_run, telegram_enabled)
-                restore_summary.append(row_r)
-            print_restore_summary(restore_summary, log_only=log_only)
+            if selected_backups is None: continue
+            summary = [restore_backup(b, BACKUP_DIR, dry_run, telegram_enabled) for b in selected_backups]
+            print_restore_summary(summary, log_only=log_only)
         elif choice == "0":
             print("Exiting workflow. Operational cycle terminated.")
             break
